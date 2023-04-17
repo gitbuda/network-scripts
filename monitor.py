@@ -4,6 +4,7 @@ import logging
 # TODO: Add aggregate OS info, total RAM, total CPU number and
 # TODO: Add the total number of Docker containers
 # TODO: Add disk health checks
+# TODO: Parallelize massively
 
 logging.basicConfig()
 logging.getLogger("paramiko").setLevel(logging.INFO)
