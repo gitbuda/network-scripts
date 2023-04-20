@@ -1,10 +1,11 @@
-from paramiko import SSHClient, WarningPolicy, RSAKey
 import logging
+import copy
+from multiprocessing import Pool
+from paramiko import SSHClient, WarningPolicy, RSAKey
 
 # TODO: Add aggregate OS info, total RAM, total CPU number and
-# TODO: Add the total number of Docker containers
+# TODO: Add the total number of acrive Docker containers, maybe `docker ps | wc -l` (-1)
 # TODO: Add disk health checks
-# TODO: Parallelize massively
 
 logging.basicConfig()
 logging.getLogger("paramiko").setLevel(logging.INFO)
@@ -31,6 +32,36 @@ commands = [
         "agg": lambda agg, new: agg + new,
     },
 ]
+
+def run_host(host):
+    client = SSHClient()
+    client.load_system_host_keys()
+    client.set_missing_host_key_policy(WarningPolicy)
+    keyfile = RSAKey.from_private_key_file("/home/buda/.ssh/memgraph_web")
+    try:
+        client.connect(host, username="mg", pkey=keyfile)
+    except:
+        print(f"unable to connect to {host}")
+        return
+    ram_value = None
+    disk_value = None
+    for c in commands:
+        c_name = c["name"]
+        c_cmd = c["cmd"]
+        print(f"{host} {c_name} {c_cmd}")
+        stdin, stdout, stderr = client.exec_command(c_cmd)
+        if c_name == "total_ram":
+            ram_value = c["fmt"](stdout.read().decode("utf-8"))
+        if c_name == "total_disk":
+            value = c["fmt"](stdout.read().decode("utf-8"))
+            disk_value = c["agg"](disk_agg, value)
+        stdin.close()
+        stdout.close()
+        stderr.close()
+    client.close()
+    return (ram_value, disk_value)
+
+
 # TODO(gitbuda): Push skiplist and onlylist into files and load by env var.
 skiplist = []
 onlylist = []
@@ -45,31 +76,14 @@ with open("/home/buda/Workspace/code/memgraph/infra/vpn/physical_hosts", "r") as
         hosts.append(host)
 
     # TODO(gitbuda): Generalize
+    avaialble_hosts = 0
     ram_agg = 0
     disk_agg = 0
-    avaialble_hosts = 0
-    for host in hosts:
-        try:
-            client.connect(host, username="mg", pkey=keyfile)
-            avaialble_hosts += 1
-        except:
-            print(f"unable to connect to {host}")
-            continue
-        for c in commands:
-            c_name = c["name"]
-            c_cmd = c["cmd"]
-            print(f"{host} {c_name} {c_cmd}")
-            stdin, stdout, stderr = client.exec_command(c_cmd)
-            if c_name == "total_ram":
-                value = c["fmt"](stdout.read().decode("utf-8"))
-                ram_agg = c["agg"](ram_agg, value)
-            if c_name == "total_disk":
-                value = c["fmt"](stdout.read().decode("utf-8"))
-                disk_agg = c["agg"](disk_agg, value)
-            stdin.close()
-            stdout.close()
-            stderr.close()
-        client.close()
+    with Pool(processes=len(hosts)) as pool:
+        results = pool.map(run_host, hosts)
+        avaialble_hosts = sum(map(lambda x: 1 if x is not None else 0, copy.copy(results)))
+        ram_agg = sum(map(lambda x: x[0] if x is not None else 0, copy.copy(results)))
+        disk_agg = sum(map(lambda x: x[1] if x is not None else 0, copy.copy(results)))
     disk_agg = int(disk_agg / 1024)
     print(f"On {avaialble_hosts} available hosts found:")
     print(f"  * RAM : {ram_agg}GB")
