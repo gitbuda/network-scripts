@@ -31,6 +31,11 @@ commands = [
         / 1024,
         "agg": lambda agg, new: agg + new,
     },
+    {
+        "name": "tailscale",
+        "cmd": "tailscale ip && hostname && ip addr | grep 10.42",
+        "fmt": lambda output: output.splitlines()
+    }
 ]
 
 def run_host(host):
@@ -45,21 +50,25 @@ def run_host(host):
         return
     ram_value = None
     disk_value = None
+    tailscale_value = None
     for c in commands:
         c_name = c["name"]
         c_cmd = c["cmd"]
         print(f"{host} {c_name} {c_cmd}")
         stdin, stdout, stderr = client.exec_command(c_cmd)
+        # TODO(gitbuda): Handle errors in case the command fails.
         if c_name == "total_ram":
             ram_value = c["fmt"](stdout.read().decode("utf-8"))
         if c_name == "total_disk":
             value = c["fmt"](stdout.read().decode("utf-8"))
             disk_value = c["agg"](disk_agg, value)
+        if c_name == "tailscale":
+            tailscale_value = c["fmt"](stdout.read().decode("utf-8"))
         stdin.close()
         stdout.close()
         stderr.close()
     client.close()
-    return (ram_value, disk_value)
+    return (ram_value, disk_value, tailscale_value)
 
 
 # TODO(gitbuda): Push skiplist and onlylist into files and load by env var.
@@ -84,7 +93,13 @@ with open("/home/buda/Workspace/code/memgraph/infra/vpn/physical_hosts", "r") as
         avaialble_hosts = sum(map(lambda x: 1 if x is not None else 0, copy.copy(results)))
         ram_agg = sum(map(lambda x: x[0] if x is not None else 0, copy.copy(results)))
         disk_agg = sum(map(lambda x: x[1] if x is not None else 0, copy.copy(results)))
+        tailscale_agg = sum(map(lambda x: 0 if x is None else 1, copy.copy(results)))
+        tailscale_ips = map(lambda x: x[2] if x is not None else None, copy.copy(results))
     disk_agg = int(disk_agg / 1024)
     print(f"On {avaialble_hosts} available hosts found:")
     print(f"  * RAM : {ram_agg}GB")
     print(f"  * DISK: {disk_agg}TB")
+    print(f"  * ACTIVE TAILSCALES: {tailscale_agg}")
+    print(f"  * TAILSCALE IPS:")
+    for host, tailscale_ip_host in zip(hosts, tailscale_ips):
+        print(f"    * {host} -> {tailscale_ip_host}")
