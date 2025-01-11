@@ -1,11 +1,17 @@
+import os
+import sys
 import logging
 import copy
-from multiprocessing import Pool
+from multiprocessing import Pool, freeze_support
 from paramiko import SSHClient, WarningPolicy, RSAKey
 
 # TODO: Add aggregate OS info, total RAM, total CPU number and
 # TODO: Add the total number of acrive Docker containers, maybe `docker ps | wc -l` (-1)
 # TODO: Add disk health checks
+
+PRIVATE_KEY = os.environ.get("PRIVATE_KEY", "private_key")
+HOSTS = os.environ.get("HOSTS", "hosts")
+HOST_USERNAME = os.environ.get("HOST_USERNAME", "host_username")
 
 logging.basicConfig()
 logging.getLogger("paramiko").setLevel(logging.INFO)
@@ -13,7 +19,7 @@ logging.getLogger("paramiko").setLevel(logging.INFO)
 client = SSHClient()
 client.load_system_host_keys()
 client.set_missing_host_key_policy(WarningPolicy)
-keyfile = RSAKey.from_private_key_file("/home/buda/.ssh/memgraph_web")
+keyfile = RSAKey.from_private_key_file(PRIVATE_KEY)
 
 commands = [
     {
@@ -42,14 +48,14 @@ def run_host(host):
     client = SSHClient()
     client.load_system_host_keys()
     client.set_missing_host_key_policy(WarningPolicy)
-    keyfile = RSAKey.from_private_key_file("/home/buda/.ssh/memgraph_web")
+    keyfile = RSAKey.from_private_key_file(PRIVATE_KEY)
     try:
-        client.connect(host, username="mg", pkey=keyfile)
+        client.connect(host, username=HOST_USERNAME, pkey=keyfile)
     except:
         print(f"unable to connect to {host}")
         return
     ram_value = None
-    disk_value = None
+    disk_value = 0
     tailscale_value = None
     for c in commands:
         c_name = c["name"]
@@ -61,7 +67,7 @@ def run_host(host):
             ram_value = c["fmt"](stdout.read().decode("utf-8"))
         if c_name == "total_disk":
             value = c["fmt"](stdout.read().decode("utf-8"))
-            disk_value = c["agg"](disk_agg, value)
+            disk_value = c["agg"](disk_value, value)
         if c_name == "tailscale":
             tailscale_value = c["fmt"](stdout.read().decode("utf-8"))
         stdin.close()
@@ -71,35 +77,37 @@ def run_host(host):
     return (ram_value, disk_value, tailscale_value)
 
 
-# TODO(gitbuda): Push skiplist and onlylist into files and load by env var.
-skiplist = []
-onlylist = []
-with open("/home/buda/Workspace/code/memgraph/infra/vpn/physical_hosts", "r") as f:
-    hosts = []
-    for line in f.readlines():
-        host = line.strip()
-        if host in skiplist:
-            continue
-        if len(onlylist) > 0 and host not in onlylist:
-            continue
-        hosts.append(host)
+if __name__ == "__main__":
+    freeze_support()
+    # TODO(gitbuda): Push skiplist and onlylist into files and load by env var.
+    skiplist = []
+    onlylist = []
+    with open(HOSTS, "r") as f:
+        hosts = []
+        for line in f.readlines():
+            host = line.strip()
+            if host in skiplist:
+                continue
+            if len(onlylist) > 0 and host not in onlylist:
+                continue
+            hosts.append(host)
 
-    # TODO(gitbuda): Generalize
-    avaialble_hosts = 0
-    ram_agg = 0
-    disk_agg = 0
-    with Pool(processes=len(hosts)) as pool:
-        results = pool.map(run_host, hosts)
-        avaialble_hosts = sum(map(lambda x: 1 if x is not None else 0, copy.copy(results)))
-        ram_agg = sum(map(lambda x: x[0] if x is not None else 0, copy.copy(results)))
-        disk_agg = sum(map(lambda x: x[1] if x is not None else 0, copy.copy(results)))
-        tailscale_agg = sum(map(lambda x: 0 if x is None else 1, copy.copy(results)))
-        tailscale_ips = map(lambda x: x[2] if x is not None else None, copy.copy(results))
-    disk_agg = int(disk_agg / 1024)
-    print(f"On {avaialble_hosts} available hosts found:")
-    print(f"  * RAM : {ram_agg}GB")
-    print(f"  * DISK: {disk_agg}TB")
-    print(f"  * ACTIVE TAILSCALES: {tailscale_agg}")
-    print(f"  * TAILSCALE IPS:")
-    for host, tailscale_ip_host in zip(hosts, tailscale_ips):
-        print(f"    * {host} -> {tailscale_ip_host}")
+        # TODO(gitbuda): Generalize
+        avaialble_hosts = 0
+        ram_agg = 0
+        disk_agg = 0
+        with Pool(processes=len(hosts)) as pool:
+            results = pool.map(run_host, hosts)
+            avaialble_hosts = sum(map(lambda x: 1 if x is not None else 0, copy.copy(results)))
+            ram_agg = sum(map(lambda x: x[0] if x is not None else 0, copy.copy(results)))
+            disk_agg = sum(map(lambda x: x[1] if x is not None else 0, copy.copy(results)))
+            tailscale_agg = sum(map(lambda x: 0 if x is None else 1, copy.copy(results)))
+            tailscale_ips = map(lambda x: x[2] if x is not None else None, copy.copy(results))
+        disk_agg = int(disk_agg / 1024)
+        print(f"On {avaialble_hosts} available hosts found:")
+        print(f"  * RAM : {ram_agg}GB")
+        print(f"  * DISK: {disk_agg}TB")
+        print(f"  * ACTIVE TAILSCALES: {tailscale_agg}")
+        print(f"  * TAILSCALE IPS:")
+        for host, tailscale_ip_host in zip(hosts, tailscale_ips):
+            print(f"    * {host} -> {tailscale_ip_host}")
