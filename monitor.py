@@ -41,9 +41,16 @@ commands = [
         "name": "tailscale",
         "cmd": "tailscale ip && hostname && ip addr | grep 10.42",
         "fmt": lambda output: output.splitlines()
+    },
+    {
+        "name": "systemctl_actions_runner",
+        "cmd": "systemctl is-active actions.runner.*",
+        "fmt": lambda output: "UP 🟢" if output == "active\n" else "DOWN 🔴"
+        # "fmt": lambda output: output
     }
 ]
 
+# TODO(gitbuda): Pick and choose what to run.
 def run_host(host):
     client = SSHClient()
     client.load_system_host_keys()
@@ -70,11 +77,13 @@ def run_host(host):
             disk_value = c["agg"](disk_value, value)
         if c_name == "tailscale":
             tailscale_value = c["fmt"](stdout.read().decode("utf-8"))
+        if c_name == "systemctl_actions_runner":
+            gha_runner_status = c["fmt"](stdout.read().decode("utf-8"))
         stdin.close()
         stdout.close()
         stderr.close()
     client.close()
-    return (ram_value, disk_value, tailscale_value)
+    return (ram_value, disk_value, tailscale_value, gha_runner_status)
 
 
 if __name__ == "__main__":
@@ -92,7 +101,7 @@ if __name__ == "__main__":
                 continue
             hosts.append(host)
 
-        # TODO(gitbuda): Generalize
+        # TODO(gitbuda): Generalize, make this code agnostic to what has been choosen to run.
         avaialble_hosts = 0
         ram_agg = 0
         disk_agg = 0
@@ -103,6 +112,7 @@ if __name__ == "__main__":
             disk_agg = sum(map(lambda x: x[1] if x is not None else 0, copy.copy(results)))
             tailscale_agg = sum(map(lambda x: 0 if x is None else 1, copy.copy(results)))
             tailscale_ips = map(lambda x: x[2] if x is not None else None, copy.copy(results))
+            gha_runners = map(lambda x: x[3] if x is not None else None, copy.copy(results))
         disk_agg = int(disk_agg / 1024)
         print(f"On {avaialble_hosts} available hosts found:")
         print(f"  * RAM : {ram_agg}GB")
@@ -111,3 +121,6 @@ if __name__ == "__main__":
         print(f"  * TAILSCALE IPS:")
         for host, tailscale_ip_host in zip(hosts, tailscale_ips):
             print(f"    * {host} -> {tailscale_ip_host}")
+        print(f"  * GHA RUNNER STATUSES:")
+        for host, gha_runner_status in zip(hosts, gha_runners):
+            print(f"    * {host} -> {gha_runner_status}")
